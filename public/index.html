@@ -10,9 +10,7 @@
   <title>Dream Journal</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300..500;1,6..72,300..400&display=swap">
+  <link rel="preload" href="fonts/newsreader-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -21,10 +19,7 @@
   <!-- Capture: the whole screen is the button. -->
   <main id="capture" class="screen night" data-state="idle">
     <header class="bar">
-      <label class="dimmer">
-        <span class="sr">Dim the screen</span>
-        <input id="dimmer" type="range" min="0" max="72" step="1" value="0">
-      </label>
+      <span></span>
       <div class="bar-right">
         <button id="cancel" class="link" type="button" data-confirm="discard it?" hidden>cancel</button>
         <a href="#/journal" class="link" id="to-journal">Journal</a>
@@ -37,16 +32,20 @@
         <p class="ask">What did you dream?</p>
         <p class="hint">Tap anywhere and start talking.</p>
       </div>
-      <p id="transcript" aria-live="polite"><span id="final"></span> <span id="interim"></span></p>
+      <p id="transcript"><span id="final"></span> <span id="interim"></span></p>
       <p id="draft-note" class="hint" hidden>unsaved — tap to keep going</p>
-      <p id="banner" role="alert" hidden>Voice input stopped on its own. Tap to pick up where you left off.</p>
+      <p id="banner" hidden></p>
+      <p id="last-saved" class="hint" hidden></p>
     </div>
 
     <form id="typing" hidden>
       <textarea id="type-box" placeholder="What did you dream?" aria-label="Type your dream"></textarea>
       <div class="typing-foot">
         <span id="type-why" class="hint"></span>
-        <button type="submit" class="quiet">save</button>
+        <span class="typing-actions">
+          <button type="button" class="link" id="retry-voice" hidden>try voice again</button>
+          <button type="submit" class="quiet">save</button>
+        </span>
       </div>
     </form>
   </main>
@@ -55,6 +54,7 @@
 
   <div id="onboarding" class="screen night" hidden></div>
   <div id="toast" role="status" aria-live="polite" hidden></div>
+  <div id="live" class="sr" role="status" aria-live="polite"></div>
 
   <script type="module" src="app.js"></script>
 </body>

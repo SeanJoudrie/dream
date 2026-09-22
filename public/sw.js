@@ -1,7 +1,18 @@
-// Offline shell. Network first so updates land immediately; the cache is only
-// there so the capture screen opens with no signal at 4am.
-const CACHE = 'dream-v1';
-const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'core.js', 'icon.svg', 'manifest.webmanifest'];
+// Offline shell. Cache first: at 4am on one bar of signal the capture screen
+// must paint from the cache immediately, never wait on the network. A fresh
+// copy is fetched in the background and used on the next open.
+const CACHE = 'dream-v2';
+const SHELL = [
+  './',
+  'index.html',
+  'style.css',
+  'app.js',
+  'core.js',
+  'icon.svg',
+  'manifest.webmanifest',
+  'fonts/newsreader-latin-wght-normal.woff2',
+  'fonts/newsreader-latin-wght-italic.woff2',
+];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -18,16 +29,22 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-  if (e.request.method !== 'GET' || url.pathname.startsWith('/api/')) return;
+  if (e.request.method !== 'GET' || url.origin !== location.origin || url.pathname.startsWith('/api/')) return;
+  const key = e.request.mode === 'navigate' ? 'index.html' : e.request;
   e.respondWith(
-    fetch(e.request)
-      .then((res) => {
-        if (res.ok && (url.origin === location.origin || url.hostname.endsWith('gstatic.com') || url.hostname.endsWith('googleapis.com'))) {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(e.request, copy));
-        }
-        return res;
-      })
-      .catch(() => caches.match(e.request, { ignoreSearch: true }).then((hit) => hit || caches.match('index.html'))),
+    caches.open(CACHE).then(async (cache) => {
+      const hit = await cache.match(key, { ignoreSearch: true });
+      const refresh = fetch(e.request)
+        .then((res) => {
+          if (res.ok) cache.put(key, res.clone());
+          return res;
+        })
+        .catch(() => hit);
+      if (hit) {
+        e.waitUntil(refresh);
+        return hit;
+      }
+      return refresh;
+    }),
   );
 });

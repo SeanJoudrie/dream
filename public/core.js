@@ -21,7 +21,6 @@ export function newEntry(raw, now = Date.now()) {
     tags: [],
     fav: false,
     vault: false,
-    imgPrompt: null,
     deletedAt: null,
   };
 }
@@ -68,7 +67,7 @@ export function purge(state, now = Date.now()) {
   };
 }
 
-export const FILTERS = ['all', 'fav', 'raw', 'private', 'trash'];
+export const FILTERS = ['all', 'fav', 'private', 'trash'];
 
 // What the journal list shows. Private dreams appear only under the Private
 // filter — not in the main list, not in search.
@@ -79,7 +78,6 @@ export function listFor(entries, { filter = 'all', query = '' } = {}) {
   else {
     rows = entries.filter((e) => !e.vault && !e.deletedAt);
     if (filter === 'fav') rows = rows.filter((e) => e.fav);
-    if (filter === 'raw') rows = rows.filter((e) => e.polished == null);
   }
   const q = query.trim().toLowerCase();
   if (q) {
@@ -103,45 +101,86 @@ export function parseTags(s) {
   ];
 }
 
-const norm = (s) => String(s).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+const norm = (s) => String(s).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 
-// Did the model hand back slices that are really from the original, and do
-// they cover it? If not, we don't trust the slicing with the user's raw text.
-export function slicesAreFaithful(original, slices) {
-  const whole = norm(original);
-  if (!slices.every((s) => norm(s) && whole.includes(norm(s)))) return false;
-  const covered = slices.reduce((n, s) => n + wordCount(norm(s)), 0);
-  return covered >= 0.9 * wordCount(whole);
+// The transcript as words, each with where it starts in the original text.
+function wordsOf(text) {
+  return [...String(text).matchAll(/\S+/g)].map((m) => ({ w: norm(m[0]), at: m.index })).filter((x) => x.w);
+}
+
+// Where does `phrase` begin in `words`, searching from word `from`? Tries the
+// whole phrase, then its first four words. Returns -1 if it isn't there.
+function findPhrase(words, phrase, from) {
+  const want = wordsOf(phrase).map((x) => x.w);
+  for (const n of [want.length, Math.min(4, want.length)]) {
+    if (!n) continue;
+    for (let i = from; i + n <= words.length; i++) {
+      let hit = true;
+      for (let j = 0; j < n && hit; j++) hit = words[i + j].w === want[j];
+      if (hit) return i;
+    }
+  }
+  return -1;
+}
+
+// Cut the transcript where each dream starts. The pieces tile the original
+// exactly — every word lands in one piece — or we return null and don't split.
+export function cutAt(text, startPhrases) {
+  const words = wordsOf(text);
+  const starts = [0];
+  for (const phrase of startPhrases.slice(1)) {
+    const i = findPhrase(words, phrase, starts.at(-1) + 1);
+    if (i === -1) return null;
+    starts.push(i);
+  }
+  return starts.map((w, k) => {
+    const from = words[w]?.at ?? text.length;
+    const to = k + 1 < starts.length ? words[starts[k + 1]].at : text.length;
+    return text.slice(from, to).trim();
+  });
 }
 
 // Apply a tidy result to an entry. One dream: fill in polished + title.
 // Several: the original entry becomes the first dream and the rest become new
-// entries alongside it, each with its own slice of the transcript. `raw` is
-// never lost — if the slices don't hold up, every piece keeps the full original.
+// entries beside it, each with its own exact piece of the transcript. The full
+// transcript as spoken is kept, untouched, in `source` on the first piece.
+// If the pieces can't be found, nothing is split: one entry, dreams joined.
 export function applyTidy(entry, result, now = Date.now()) {
-  const dreams = (result?.dreams || []).filter((d) => d && String(d.text || '').trim()).slice(0, MAX_SPLIT);
+  let dreams = (result?.dreams || []).filter((d) => d && String(d.text || '').trim());
   if (!dreams.length) return [entry];
-
-  if (dreams.length === 1) {
-    return [{ ...entry, polished: dreams[0].text.trim(), title: entry.title || cleanTitle(dreams[0].title), updatedAt: now }];
+  if (dreams.length > MAX_SPLIT) {
+    const rest = dreams.slice(MAX_SPLIT - 1);
+    dreams = [...dreams.slice(0, MAX_SPLIT - 1), { ...rest[0], text: rest.map((d) => d.text.trim()).join('\n\n') }];
   }
 
-  const faithful = slicesAreFaithful(entry.raw, dreams.map((d) => d.transcript || ''));
+  const one = (polished, title) => {
+    polished = polished.trim();
+    return [{ ...entry, polished, aiPolished: polished, title: entry.title || cleanTitle(title), updatedAt: now }];
+  };
+  if (dreams.length === 1) return one(dreams[0].text, dreams[0].title);
+
+  const pieces = cutAt(entry.raw, dreams.map((d) => d.starts_with || ''));
+  if (!pieces || pieces.some((p) => !p)) return one(dreams.map((d) => d.text.trim()).join('\n\n* * *\n\n'), dreams[0].title);
+
   return dreams.map((d, i) => {
     const base =
       i === 0
-        ? entry
-        : { ...newEntry('', now), createdAt: entry.createdAt + i, tags: [...entry.tags], note: '', vault: entry.vault };
+        ? { ...entry, source: entry.source ?? entry.raw }
+        : { ...newEntry('', now), createdAt: entry.createdAt + i, tags: [...entry.tags], vault: entry.vault };
+    const polished = d.text.trim();
     return {
       ...base,
-      raw: faithful ? d.transcript.trim() : entry.raw,
-      polished: d.text.trim(),
+      raw: pieces[i],
+      polished,
+      aiPolished: polished,
       title: cleanTitle(d.title) || (i === 0 ? entry.title : null),
-      imgPrompt: i === 0 ? entry.imgPrompt : null,
       updatedAt: now,
     };
   });
 }
+
+// Has the user edited the tidied text since the AI last wrote it?
+export const polishedEdited = (e) => e.polished != null && e.aiPolished != null && e.polished !== e.aiPolished;
 
 const cleanTitle = (t) => String(t || '').trim().replace(/^["'“]|["'”.]$/g, '') || null;
 
@@ -164,15 +203,19 @@ export const isoDay = (ms) => {
 export function exportText(entries, now = Date.now()) {
   const live = sortEntries(entries.filter((e) => !e.deletedAt).slice());
   const rule = '─'.repeat(40);
-  const out = [`Dream journal — exported ${isoDay(now)}`, `${live.length} dream${live.length === 1 ? '' : 's'}`, ''];
+  const out = [
+    `Dream journal — exported ${isoDay(now)}`,
+    `${live.length} dream${live.length === 1 ? '' : 's'}. Trash is not included.`,
+    '',
+  ];
   for (const e of live) {
     out.push(rule, formatWhen(e.createdAt) + (e.vault ? '  (private)' : '') + (e.fav ? '  ★' : ''));
     if (e.title) out.push(e.title);
     out.push('', textOf(e).trim());
     if (e.polished) out.push('', 'Original transcript:', e.raw.trim());
+    if (e.source && e.source !== e.raw) out.push('', 'Everything said that time, before it was split:', e.source.trim());
     if (e.note?.trim()) out.push('', 'Note: ' + e.note.trim());
     if (e.tags?.length) out.push('', 'Tags: ' + e.tags.join(', '));
-    if (e.imgPrompt?.trim()) out.push('', 'Image prompt: ' + e.imgPrompt.trim());
     out.push('');
   }
   return out.join('\n');

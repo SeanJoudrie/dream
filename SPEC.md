@@ -438,4 +438,16 @@ It's a proving ground for the interaction, not a foundation. The real app is nat
 
 ---
 
+## 18. Changes after the prototype audit (2026-09-22)
+
+Recorded here rather than rewritten into the sections above. Full reasoning in `docs/AUDIT.md`.
+
+- **Cut:** image prompts (§8), Explore → This month (§7), word count, the `raw` row marker, the Untidied filter.
+- **Moved:** the dimmer slider is off the capture screen. It is now a setting (Dim / Dimmer / Darkest) that applies only to capture.
+- **Capture:** a recording also ends on its own after 45 s with no new speech (saved, quieter tone). A running recognizer that hears nothing for 8 s counts as a dropout. Stop taps within 1.2 s of start are ignored. The Journal link is hidden while recording, and leaving the screen saves. Unfinished words are kept across recognizer restarts (closes §4.4's gap). A save is confirmed only once it's on disk. The dropout vibration ignores the Sounds toggle.
+- **Tidy (§6.2):** prompt revised: keeps the speaker's tense, doesn't split on false awakenings or mentions of other nights, keeps dream shape-shifts and dream repetition, fixes only obvious mishearings, never softens content. The model returns each dream's first few words (`starts_with`) and the code cuts the transcript there; the full original is kept in a new `source` field. "Tidy again" asks before replacing hand edits.
+- **Offline:** the font is self-hosted and the app shell loads cache-first.
+
+---
+
 *End of spec.*

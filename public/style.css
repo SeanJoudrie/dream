@@ -1,5 +1,22 @@
 /* Dream Journal — first-pass design. Palette from SPEC §14; not locked. */
 
+/* Self-hosted so the capture screen never waits on a network request.
+   Newsreader, SIL Open Font License — see fonts/OFL.txt. */
+@font-face {
+  font-family: 'Newsreader';
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url(fonts/newsreader-latin-wght-normal.woff2) format('woff2');
+}
+@font-face {
+  font-family: 'Newsreader';
+  font-style: italic;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url(fonts/newsreader-latin-wght-italic.woff2) format('woff2');
+}
+
 :root {
   --night-bg: #0a0912;
   --night-text: #a79ecb;
@@ -65,7 +82,6 @@ a { color: inherit; }
 .night .link { color: var(--night-text); }
 #cancel.armed { color: var(--night-warn); opacity: 1; }
 
-.dimmer input { width: 110px; accent-color: var(--night-text); opacity: .55; }
 
 /* ── capture ─────────────────────────────────────────────── */
 
@@ -95,14 +111,20 @@ a { color: inherit; }
 
 .ask { font: 400 30px/1.25 var(--serif); margin: 0 0 10px; color: var(--night-text); }
 .hint { font-size: 14px; color: var(--day-muted); margin: 0; }
-.night .hint { color: var(--night-text); opacity: .6; }
+.night .hint { color: var(--night-text); opacity: .78; }
 
+/* Only the last four lines, fading out at the top. Older words step back to
+   the dim text colour; the words arriving now are the brightest thing on screen. */
 #transcript {
   font: 300 clamp(24px, 6vw, 32px)/1.4 var(--serif);
-  color: var(--night-live); margin: 0 0 14px; white-space: pre-wrap;
-  max-height: 60vh; overflow-y: auto;
+  color: var(--night-text); margin: 0 0 14px; white-space: pre-wrap;
+  max-height: calc(4 * 1.4em); overflow: hidden;
 }
-#interim { opacity: .45; }
+#transcript.overflow {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 1.4em);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 1.4em);
+}
+#interim { color: var(--night-live); }
 #draft-note { margin-top: 4px; }
 
 #banner {
@@ -174,9 +196,9 @@ input:focus-visible, textarea:focus-visible { border-color: var(--accent); }
 }
 .entry .dream {
   width: 100%; resize: none; overflow: hidden; background: none; border: 0; outline: none;
-  font: 300 20px/1.65 var(--serif); padding: 14px 0 0; min-height: 3.5em;
+  font: 300 20px/1.65 var(--serif); padding: 14px 0 0; min-height: 3.5em; margin-bottom: 18px;
 }
-.count { font-size: 13px; color: var(--day-muted); margin: 6px 0 18px; }
+.orig .source { font: 16px/1.55 var(--serif); color: var(--day-muted); margin: 10px 0 0; white-space: pre-wrap; }
 
 .actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 26px; }
 .quiet {
@@ -192,16 +214,11 @@ input:focus-visible, textarea:focus-visible { border-color: var(--accent); }
 .orig { margin: 0 0 28px; border-top: 1px solid var(--day-line); padding-top: 14px; }
 .orig summary { cursor: pointer; color: var(--day-muted); font-size: 14px; }
 .orig .hint { margin: 10px 0 6px; font-style: italic; }
-.orig textarea, .img textarea {
+.orig textarea {
   width: 100%; resize: none; overflow: hidden; background: var(--day-raised);
   border: 1px solid transparent; border-radius: 8px; padding: 12px 14px; outline: none;
   font: 16px/1.55 var(--serif); color: var(--day-muted);
 }
-.img textarea { color: var(--day-text); margin: 6px 0 10px; }
-.img .actions { margin-bottom: 8px; }
-.img { margin: 0 0 28px; }
-.img .hint { font-style: italic; }
-.label { font-size: 13px; color: var(--day-muted); }
 
 .field { display: block; margin: 0 0 22px; }
 .field > span { display: block; font-size: 13px; color: var(--day-muted); margin-bottom: 6px; }
@@ -270,3 +287,12 @@ input:focus-visible, textarea:focus-visible { border-color: var(--accent); }
   background: var(--day-raised); color: var(--day-text); border: 1px solid var(--day-line);
   padding: 10px 16px; border-radius: 8px; font-size: 15px;
 }
+
+/* ── added after audit ───────────────────────────────────── */
+
+.choice { border: 0; padding: 0; margin: 0 0 26px; }
+.choice legend { padding: 0; margin-bottom: 8px; }
+.choice label { margin-right: 22px; color: var(--day-muted); cursor: pointer; }
+.choice input { accent-color: var(--accent); margin-right: 4px; }
+.typing-actions { display: flex; gap: 18px; align-items: center; }
+#last-saved { margin-top: 18px; }

@@ -16,9 +16,11 @@ const TYPES = {
   '.svg': 'image/svg+xml',
   '.webmanifest': 'application/manifest+json',
   '.json': 'application/json',
+  '.woff2': 'font/woff2',
+  '.txt': 'text/plain; charset=utf-8',
 };
 
-const TASKS = new Set(['tidy', 'repeats', 'who', 'month', 'ask', 'image']);
+const TASKS = new Set(['tidy', 'repeats', 'who', 'ask']);
 
 function send(res, status, body, headers = {}) {
   const json = typeof body !== 'string';
@@ -104,7 +106,7 @@ function pickAI() {
   if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN) {
     return createAI();
   }
-  console.log('AI: off — set ANTHROPIC_API_KEY to enable tidying, Explore and image prompts');
+  console.log('AI: off — set ANTHROPIC_API_KEY to enable tidying and Explore');
   return null;
 }
 

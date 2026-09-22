@@ -20,8 +20,7 @@ const fakeClient = {
         calls.push(req);
         const task = Object.entries(SYSTEMS).find(([, s]) => s === req.system)[0];
         const canned = {
-          tidy: { dreams: [{ title: 'Boat', text: 'I am on a boat.', transcript: 'boat' }] },
-          month: { recap: 'You dreamed about boats.' },
+          tidy: { dreams: [{ title: 'Boat', text: 'I am on a boat.', starts_with: 'boat' }] },
         }[task] || { items: [] };
         return { stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(canned) }] };
       },
@@ -45,10 +44,11 @@ after(async () => {
 const post = (body) =>
   fetch(base + '/api/ai', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
-test('tidy prompt is the spec wording, and every explore prompt carries the no-interpreting rule', () => {
-  assert.match(TIDY, /You're a typist, not\n  an author\./);
-  assert.match(TIDY, /Never more than four\.$/);
-  for (const k of ['repeats', 'who', 'month', 'ask']) assert.ok(SYSTEMS[k].endsWith(NO_INTERPRETING), k);
+test('tidy prompt carries its load-bearing lines, and every explore prompt carries the no-interpreting rule', () => {
+  assert.match(TIDY, /You're a typist, not an author\./);
+  assert.match(TIDY, /false awakening is part of the\n  same dream/);
+  assert.match(TIDY, /starts_with/);
+  for (const k of ['repeats', 'who', 'ask']) assert.ok(SYSTEMS[k].endsWith(NO_INTERPRETING), k);
   assert.match(NO_INTERPRETING, /You are an index, not a therapist\./);
 });
 
@@ -80,6 +80,8 @@ test('the client cannot supply its own prompt', async () => {
   assert.equal(r.status, 200);
   assert.equal(calls.at(-1).system, TIDY);
   assert.equal((await post({ task: 'write-a-poem', input: {} })).status, 400);
+  assert.equal((await post({ task: 'image', input: { text: 'boat' } })).status, 400);
+  assert.equal((await post({ task: 'month', input: { dreams: [] } })).status, 400);
   assert.equal((await post({ task: 'tidy', input: { text: '  ' } })).status, 400);
 });
 

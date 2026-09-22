@@ -1,7 +1,6 @@
 import {
   applyTidy,
   corpusOf,
-  DAY,
   daysLeft,
   exportFilename,
   exportText,
@@ -12,6 +11,7 @@ import {
   newEntry,
   newId,
   parseTags,
+  polishedEdited,
   purge,
   sortEntries,
   textOf,
@@ -33,8 +33,10 @@ const LS = {
   set(k, v) {
     try {
       localStorage.setItem('dj.' + k, JSON.stringify(v));
+      return true;
     } catch {
       toast("Couldn't save to this device. Storage may be full.");
+      return false;
     }
   },
   del(k) {
@@ -45,7 +47,7 @@ const LS = {
 };
 
 let state = purge({ entries: sortEntries(LS.get('entries', [])), dead: LS.get('dead', []) });
-let settings = { sounds: true, localOnly: false, onboarded: false, micPrimed: false, ...LS.get('settings', {}) };
+let settings = { sounds: true, localOnly: false, onboarded: false, micPrimed: false, dim: 'dim', ...LS.get('settings', {}) };
 let syncKey = LS.get('syncKey', null);
 if (!syncKey) LS.set('syncKey', (syncKey = newSyncKey()));
 persist();
@@ -56,16 +58,18 @@ function newSyncKey() {
 }
 
 function persist() {
-  LS.set('entries', state.entries);
-  LS.set('dead', state.dead);
+  const ok = LS.set('entries', state.entries);
+  return LS.set('dead', state.dead) && ok;
 }
 
 function commit() {
-  persist();
+  const ok = persist();
   schedulePush();
+  return ok;
 }
 
 const saveSettings = () => LS.set('settings', settings);
+const DIM_LEVELS = { dim: 0, dimmer: 0.35, darkest: 0.6 };
 const find = (id) => state.entries.find((e) => e.id === id);
 
 function upsert(...entries) {
@@ -75,7 +79,7 @@ function upsert(...entries) {
     else state.entries[i] = e;
   }
   sortEntries(state.entries);
-  commit();
+  return commit();
 }
 
 function patch(id, fields) {
@@ -159,8 +163,10 @@ function tone(freqs, { dur = 0.18, gap = 0.04, gain = 0.05 } = {}) {
   } catch {}
 }
 
-function buzz(pattern) {
-  if (!settings.sounds) return;
+// `always` is for the dropout alert: turning sounds off to spare a sleeping
+// partner must not make the one warning that matters silent.
+function buzz(pattern, { always = false } = {}) {
+  if (!settings.sounds && !always) return;
   try {
     navigator.vibrate?.(pattern);
   } catch {}
@@ -169,7 +175,8 @@ function buzz(pattern) {
 const feedback = {
   started: () => (tone([392, 588]), buzz(18)),
   saved: () => (tone([523], { dur: 0.3 }), buzz(30)),
-  dropped: () => (tone([588, 370], { dur: 0.24, gain: 0.12 }), buzz([40, 70, 40])),
+  savedQuiet: () => (tone([523], { dur: 0.3, gain: 0.025 }), buzz(15)),
+  dropped: () => (tone([588, 370], { dur: 0.24, gain: 0.12 }), buzz([40, 70, 40], { always: true })),
   discarded: () => (tone([330], { dur: 0.22 }), buzz(12)),
 };
 
@@ -177,21 +184,34 @@ const feedback = {
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const WATCHDOG_MS = 900;
-const DEAD_AFTER_MS = 2600;
-const FIRST_START_MS = 10_000;
+const DEAD_AFTER_MS = 2600; // recognizer not alive this long → dropout
+const FIRST_START_MS = 10_000; // allowance for a permission prompt on first start
+const DEAF_AFTER_MS = 8000; // running but no words at all this long → dropout
+const SILENT_SAVE_MS = 45_000; // no new words this long → they fell asleep; save
+const STOP_GUARD_MS = 1200; // a stop tap this soon after start is a stray touch
 
 const cap = {
   want: false, // we intend to be recording
   running: false, // the recognizer says it is
   lastAlive: 0,
+  armedAt: 0, // when this recording started
+  heard: false, // any result since this recording started
+  lastHeardAt: 0,
   rec: null,
   finalText: '',
   interim: '',
   startedAt: 0,
   watchdog: 0,
   lock: null,
-  dropped: false,
-  blocked: false, // mic refused or unavailable → typing
+  dropped: null, // null, or why capture stopped on its own: 'dead' | 'deaf' | 'unsaved'
+  blocked: false, // mic refused → typing
+};
+
+const BANNERS = {
+  dead: 'Voice input stopped on its own. Tap to pick up where you left off.',
+  deaf: 'Not hearing anything. Tap to try again.',
+  unsaved: "Couldn't save — it's still here. Tap to try again.",
+  busy: 'Another app is using the microphone. Tap to try again.',
 };
 
 const join = (a, b) => [a, b].map((s) => (s || '').trim()).filter(Boolean).join(' ');
@@ -210,15 +230,26 @@ function restoreDraft() {
   cap.startedAt = d?.startedAt || 0;
 }
 
+// Interim words become permanent whenever a recognizer session ends, so a
+// restart can never overwrite them.
+function keepInterim() {
+  if (!cap.interim) return;
+  cap.finalText = join(cap.finalText, cap.interim);
+  cap.interim = '';
+  persistDraft();
+}
+
 const typingMode = () => !SR || cap.blocked;
 
 function startRecording() {
   if (typingMode() || cap.want) return;
+  const now = Date.now();
   cap.want = true;
   cap.everRan = false;
-  cap.dropped = false;
-  if (!cap.startedAt) cap.startedAt = Date.now();
-  cap.lastAlive = Date.now();
+  cap.dropped = null;
+  cap.heard = false;
+  cap.armedAt = cap.lastAlive = cap.lastHeardAt = now;
+  if (!cap.startedAt) cap.startedAt = now;
   feedback.started();
   lockScreen();
   startRecognizer();
@@ -245,6 +276,7 @@ function startRecognizer() {
     if (!mine()) return;
     cap.running = false;
     cap.lastAlive = Date.now();
+    keepInterim();
     // Browsers end sessions on silence. Quietly start a new one; if that
     // doesn't come back, the watchdog calls it a dropout.
     if (cap.want) setTimeout(() => cap.want && !cap.running && mine() && tryStart(), 250);
@@ -258,13 +290,16 @@ function startRecognizer() {
       else interim += r[0].transcript;
     }
     cap.interim = interim.trim();
+    cap.heard = true;
+    cap.lastHeardAt = Date.now();
     persistDraft();
     paintTranscript();
   };
   rec.onerror = (ev) => {
     if (!mine()) return;
-    if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed' || ev.error === 'audio-capture') micBlocked();
-    else if (ev.error === 'network') dropout();
+    if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') micBlocked();
+    else if (ev.error === 'audio-capture') dropout('busy');
+    else if (ev.error === 'network') dropout('dead');
   };
   tryStart();
 }
@@ -277,12 +312,15 @@ function tryStart() {
   }
 }
 
-// SPEC §4.2: the highest-value feature. If we want to be recording and the
-// recognizer hasn't been alive for 2.6s, it died. Say so, loudly enough.
+// SPEC §4.2. Three ways a recording goes wrong without anyone noticing:
+// the recognizer dies, it runs but hears nothing, or the person falls asleep.
 function watch() {
-  // Before the first start, allow time for a permission prompt to be answered.
+  if (!cap.want) return;
+  const now = Date.now();
   const limit = cap.everRan ? DEAD_AFTER_MS : FIRST_START_MS;
-  if (cap.want && !cap.running && Date.now() - cap.lastAlive > limit) dropout();
+  if (!cap.running && now - cap.lastAlive > limit) return dropout('dead');
+  if (!cap.heard && cap.everRan && now - cap.armedAt > DEAF_AFTER_MS) return dropout('deaf');
+  if (cap.heard && now - cap.lastHeardAt > SILENT_SAVE_MS) return stopAndSave({ quiet: true });
 }
 
 function haltRecognizer() {
@@ -297,31 +335,43 @@ function haltRecognizer() {
   releaseScreen();
 }
 
-function dropout() {
+function dropout(why) {
   if (!cap.want) return;
   haltRecognizer();
-  cap.finalText = join(cap.finalText, cap.interim);
-  cap.interim = '';
-  persistDraft();
-  cap.dropped = true;
+  keepInterim();
+  cap.dropped = why;
   feedback.dropped();
   paintCapture();
 }
 
 // Tap again → saved. No confirmation. Ever.
-function stopAndSave() {
+function stopAndSave({ quiet = false } = {}) {
   haltRecognizer();
-  saveDraftAsEntry(join(cap.finalText, cap.interim));
+  saveDraftAsEntry(join(cap.finalText, cap.interim), { quiet });
 }
 
-function saveDraftAsEntry(text) {
+// "Saved" is only said once the dream is actually on disk. If the write fails,
+// the draft stays and the user hears the dropout tone instead.
+function saveDraftAsEntry(text, { quiet = false } = {}) {
   text = (text || '').trim();
-  if (text) {
-    const e = newEntry(text, cap.startedAt || Date.now());
-    e.updatedAt = Date.now();
-    upsert(e);
-    feedback.saved();
+  if (!text) {
+    feedback.discarded(); // nothing heard — sounds different from "saved"
+    return resetCapture();
   }
+  const e = newEntry(text, cap.startedAt || Date.now());
+  e.updatedAt = Date.now();
+  const written = upsert(e) && LS.get('entries', []).some((x) => x.id === e.id);
+  if (!written) {
+    state.entries = state.entries.filter((x) => x.id !== e.id);
+    cap.finalText = text;
+    cap.interim = '';
+    persistDraft();
+    cap.dropped = 'unsaved';
+    feedback.dropped();
+    return paintCapture();
+  }
+  quiet ? feedback.savedQuiet() : feedback.saved();
+  LS.set('lastSaved', e.createdAt);
   resetCapture();
 }
 
@@ -336,7 +386,7 @@ function resetCapture() {
   cap.finalText = '';
   cap.interim = '';
   cap.startedAt = 0;
-  cap.dropped = false;
+  cap.dropped = null;
   disarm($('#cancel'));
   paintCapture();
 }
@@ -344,8 +394,7 @@ function resetCapture() {
 function micBlocked() {
   haltRecognizer();
   cap.blocked = true;
-  cap.finalText = join(cap.finalText, cap.interim);
-  cap.interim = '';
+  keepInterim();
   persistDraft();
   paintCapture();
 }
@@ -371,8 +420,9 @@ document.addEventListener('visibilitychange', () => {
 
 function onStageTap() {
   if (typingMode()) return;
-  if (cap.want) stopAndSave();
-  else startRecording();
+  if (!cap.want) return startRecording();
+  if (Date.now() - cap.armedAt < STOP_GUARD_MS) return; // double-tap or a stray touch
+  stopAndSave();
 }
 
 function paintCapture() {
@@ -381,17 +431,25 @@ function paintCapture() {
   const hasText = !!join(cap.finalText, cap.interim);
   el.dataset.state = typingMode() ? 'typing' : recording ? 'recording' : hasText ? 'draft' : 'idle';
   $('#cancel').hidden = !recording;
+  $('#to-journal').hidden = recording;
   $('#stage').hidden = typingMode();
+  $('#stage').setAttribute('aria-pressed', String(recording));
   $('#typing').hidden = !typingMode();
   $('#idle-copy').hidden = recording || hasText;
-  $('#draft-note').hidden = recording || !hasText || cap.dropped;
+  $('#draft-note').hidden = recording || !hasText || !!cap.dropped;
   $('#banner').hidden = !cap.dropped;
+  $('#banner').textContent = BANNERS[cap.dropped] || '';
+  const last = LS.get('lastSaved', 0);
+  $('#last-saved').hidden = recording || hasText || !last || Date.now() - last > 12 * 3600_000;
+  $('#last-saved').textContent = last ? `Saved · ${formatWhen(last).split(' · ')[1]}` : '';
+  $('#live').textContent = recording ? 'Recording' : cap.dropped ? BANNERS[cap.dropped] : '';
   if (typingMode()) {
     const box = $('#type-box');
     if (!box.value && hasText) box.value = join(cap.finalText, cap.interim);
     $('#type-why').textContent = !SR
       ? "This browser can't turn speech into text, so type it instead."
       : 'The microphone is off for this app. Allow it in your browser settings to talk instead.';
+    $('#retry-voice').hidden = !SR;
   }
   paintTranscript();
 }
@@ -399,6 +457,9 @@ function paintCapture() {
 function paintTranscript() {
   $('#final').textContent = cap.finalText;
   $('#interim').textContent = cap.interim;
+  const t = $('#transcript');
+  t.scrollTop = t.scrollHeight; // always show the newest words
+  t.classList.toggle('overflow', t.scrollHeight > t.clientHeight + 1);
 }
 
 // ─── two-tap confirm ────────────────────────────────────────────────────────
@@ -412,12 +473,16 @@ function armable(btn, onConfirm) {
       onConfirm();
       return;
     }
-    btn.dataset.armed = '1';
-    btn.dataset.label = btn.textContent;
-    btn.textContent = btn.dataset.confirm;
-    btn.classList.add('armed');
-    btn._t = setTimeout(() => disarm(btn), 4000);
+    arm(btn);
   });
+}
+
+function arm(btn) {
+  btn.dataset.armed = '1';
+  btn.dataset.label = btn.textContent;
+  btn.textContent = btn.dataset.confirm;
+  btn.classList.add('armed');
+  btn._t = setTimeout(() => disarm(btn), 4000);
 }
 
 function disarm(btn) {
@@ -464,6 +529,10 @@ window.addEventListener('hashchange', render);
 function render() {
   const r = route();
   const onCapture = r.name === 'capture';
+  // Leaving the capture screen never leaves a hot mic behind it.
+  if (!onCapture && cap.want) stopAndSave();
+  // Capture-screen dimming (a setting) applies only to the capture screen.
+  $('#dim').style.opacity = onCapture ? DIM_LEVELS[settings.dim] ?? 0 : 0;
   $('#capture').hidden = !onCapture;
   $('#page').hidden = onCapture;
   document.querySelector('meta[name=theme-color]').content = onCapture ? '#0a0912' : '#131120';
@@ -477,7 +546,7 @@ function render() {
 // ─── journal ────────────────────────────────────────────────────────────────
 
 const journalView = { filter: 'all', query: '' };
-const FILTER_LABELS = { all: 'All', fav: 'Favorites', raw: 'Untidied', private: 'Private', trash: 'Trash' };
+const FILTER_LABELS = { all: 'All', fav: 'Favorites', private: 'Private', trash: 'Trash' };
 
 function pageHead(back, backLabel, extra = '') {
   return `<header class="bar"><a class="link" href="${back}">${backLabel}</a><nav class="bar-right">${extra}</nav></header>`;
@@ -514,7 +583,6 @@ function renderJournal() {
 const EMPTY = {
   all: 'Nothing yet. The next dream you tell it goes here.',
   fav: 'No favorites yet. Star a dream from its page.',
-  raw: 'Everything has been tidied.',
   private: 'Nothing private. Any dream can be moved here from its page.',
   trash: 'Trash is empty. Deleted dreams wait here for 30 days.',
 };
@@ -531,7 +599,6 @@ function paintRows() {
     .map((e) => {
       const text = textOf(e);
       const dots = [
-        e.polished == null ? '<span class="dot-tag">raw</span>' : '',
         e.vault ? '<span class="dot-tag">private</span>' : '',
         e.deletedAt ? `<span class="dot-tag">${daysLeft(e, now)}d left</span>` : '',
       ].join('');
@@ -548,8 +615,6 @@ function paintRows() {
 const firstWords = (s) => s.split(/\s+/).slice(0, 7).join(' ') + (wordCount(s) > 7 ? '…' : '');
 
 // ─── entry ──────────────────────────────────────────────────────────────────
-
-const usedScenes = new Map(); // entry id → scenes already turned into prompts
 
 function renderEntry(id) {
   const e = find(id);
@@ -570,10 +635,9 @@ function renderEntry(id) {
       <time class="when">${formatWhen(e.createdAt)}</time>
       <input id="title" class="title" value="${esc(e.title || '')}" placeholder="Untitled" aria-label="Title">
       <textarea id="text" class="dream" aria-label="Dream">${esc(textOf(e))}</textarea>
-      <p class="count"><span id="words">${wordCount(textOf(e))}</span> words</p>
 
       <div class="actions">
-        ${aiOk ? `<button type="button" class="quiet" id="tidy">${e.polished ? 'Tidy again' : 'Tidy up the transcript'}</button>` : ''}
+        ${aiOk ? `<button type="button" class="quiet" id="tidy" data-confirm="replace your edits?">${e.polished ? 'Tidy again' : 'Tidy up the transcript'}</button>` : ''}
         <button type="button" class="quiet" id="fav" aria-pressed="${e.fav}">${e.fav ? '★ Favorite' : '☆ Favorite'}</button>
       </div>
 
@@ -584,27 +648,17 @@ function renderEntry(id) {
              <textarea id="raw" aria-label="Original transcript">${esc(e.raw)}</textarea></details>`
           : ''
       }
+      ${
+        e.source && e.source !== e.raw
+          ? `<details class="orig"><summary>Everything you said, before it was split</summary>
+             <p class="source">${esc(e.source)}</p></details>`
+          : ''
+      }
 
       <label class="field"><span>Tags</span>
         <input id="tags" value="${esc(e.tags.join(', '))}" placeholder="lucid, flying" autocomplete="off"></label>
       <label class="field"><span>Note</span>
         <textarea id="note" placeholder="Anything about that day, in your own words.">${esc(e.note)}</textarea></label>
-
-      <section class="img">
-        ${
-          e.imgPrompt != null
-            ? `<span class="label">Image prompt</span>
-               <textarea id="imgPrompt" aria-label="Image prompt">${esc(e.imgPrompt)}</textarea>
-               <div class="actions">
-                 <button type="button" class="quiet" id="copy">Copy</button>
-                 ${aiOk ? '<button type="button" class="quiet" id="another">Try another scene</button>' : ''}
-               </div>
-               <p class="hint">We probably didn't nail it. Edit it — it's just text.</p>`
-            : aiOk
-              ? '<button type="button" class="quiet" id="makeImg">Turn it into an image prompt</button>'
-              : ''
-        }
-      </section>
 
       <label class="toggle"><input type="checkbox" id="vault" ${e.vault ? 'checked' : ''}>
         <span>Private<small>Hidden from the list and from search. Never sent to any AI.</small></span></label>
@@ -615,13 +669,11 @@ function renderEntry(id) {
   grow($('#text'));
   grow($('#raw'));
   grow($('#note'));
-  grow($('#imgPrompt'));
 
   const save = debounce((fields) => patch(id, fields), 350);
   on('#title', 'input', (ev) => save({ title: ev.target.value.trim() || null }));
   on('#text', 'input', (ev) => {
     grow(ev.target);
-    $('#words').textContent = wordCount(ev.target.value);
     save(find(id).polished != null ? { polished: ev.target.value } : { raw: ev.target.value });
   });
   on('#raw', 'input', (ev) => (grow(ev.target), save({ raw: ev.target.value })));
@@ -631,7 +683,6 @@ function renderEntry(id) {
     patch(id, { tags });
   });
   on('#note', 'input', (ev) => (grow(ev.target), save({ note: ev.target.value })));
-  on('#imgPrompt', 'input', (ev) => (grow(ev.target), save({ imgPrompt: ev.target.value })));
 
   on('#fav', 'click', () => {
     save.flush();
@@ -656,37 +707,26 @@ function renderEntry(id) {
   const forever = $('#forever');
   if (forever) armable(forever, () => (forget(id), (location.hash = '#/journal')));
 
-  on('#tidy', 'click', async (ev) => {
+  // Tidy always works from the transcript. If the tidied text has been
+  // edited by hand since, it asks once before replacing those edits.
+  const tidyBtn = $('#tidy');
+  tidyBtn?.addEventListener('click', async () => {
     save.flush();
     const entry = find(id);
-    await busy(ev.target, 'Tidying…', async () => {
-      const result = await ai('tidy', [entry], { text: entry.raw });
-      const pieces = applyTidy(find(id), result, Date.now());
-      upsert(...pieces);
-      if (pieces.length > 1) toast(`Heard ${pieces.length} separate dreams — split them out`);
-      renderEntry(id);
-    });
-  });
-
-  const makePrompt = async (ev) => {
-    save.flush();
-    const entry = find(id);
-    const avoid = usedScenes.get(id) || [];
-    await busy(ev.target, 'Writing…', async () => {
-      const { scene, prompt } = await ai('image', [entry], { text: textOf(entry), avoid });
-      usedScenes.set(id, [...avoid, scene]);
-      patch(id, { imgPrompt: prompt.trim() });
-      renderEntry(id);
-    });
-  };
-  on('#makeImg', 'click', makePrompt);
-  on('#another', 'click', makePrompt);
-  on('#copy', 'click', async () => {
+    if (polishedEdited(entry) && !tidyBtn.dataset.armed) return arm(tidyBtn);
+    disarm(tidyBtn);
+    $('#text').readOnly = true; // nothing typed now can be overwritten by the result
     try {
-      await navigator.clipboard.writeText($('#imgPrompt').value);
-      toast('Copied.');
-    } catch {
-      $('#imgPrompt').select();
+      await busy(tidyBtn, 'Tidying…', async () => {
+        const result = await ai('tidy', [entry], { text: entry.raw });
+        if (!result?.dreams?.length) return toast("Didn't find a dream in there to tidy.");
+        const pieces = applyTidy(find(id), result, Date.now());
+        upsert(...pieces);
+        if (pieces.length > 1) toast(`Heard ${pieces.length} separate dreams — split them out`);
+        renderEntry(id);
+      });
+    } finally {
+      if ($('#text')) $('#text').readOnly = false;
     }
   });
 
@@ -698,7 +738,6 @@ function renderEntry(id) {
 const TOOLS = [
   { key: 'repeats', name: 'Repeats', min: 4, verb: 'Count', blurb: 'Concrete things that show up in more than one dream, counted.' },
   { key: 'who', name: 'Who and where', min: 3, verb: 'Make the index', blurb: 'The people and places in your dreams, and how often.' },
-  { key: 'month', name: 'This month', min: 3, verb: 'Recap', blurb: 'A plain recap of the last 30 days.' },
   { key: 'ask', name: 'Ask your journal', min: 1, blurb: 'Find dreams by describing them. “Dreams where I was late.”' },
 ];
 
@@ -706,7 +745,6 @@ const exploreResults = {};
 
 function renderExplore() {
   const corpus = corpusOf(state.entries);
-  const recent = corpus.filter((e) => Date.now() - e.createdAt < 30 * DAY);
   const privateCount = state.entries.filter((e) => e.vault && !e.deletedAt).length;
 
   $('#page').innerHTML = `
@@ -722,7 +760,7 @@ function renderExplore() {
       }
       <div class="tools">
         ${TOOLS.map((t) => {
-          const have = t.key === 'month' ? recent.length : corpus.length;
+          const have = corpus.length;
           const short = have < t.min;
           return `<section class="tool" data-tool="${t.key}">
             <h2>${t.name}</h2>
@@ -731,7 +769,7 @@ function renderExplore() {
               settings.localOnly
                 ? ''
                 : short
-                  ? `<p class="hint">Needs at least ${t.min} dream${t.min > 1 ? 's' : ''}${t.key === 'month' ? ' from the last 30 days' : ''}. You have ${have}. That's normal early on.</p>`
+                  ? `<p class="hint">Needs at least ${t.min} dream${t.min > 1 ? 's' : ''}. You have ${have}. That's normal early on.</p>`
                   : t.key === 'ask'
                     ? `<form class="ask-form"><input name="q" placeholder="Dreams where I was late" autocomplete="off"><button class="quiet">Find</button></form>`
                     : `<button type="button" class="quiet run">${t.verb}${exploreResults[t.key] ? ' again' : ''}</button>`
@@ -745,7 +783,7 @@ function renderExplore() {
   $$('#page .run').forEach((btn) =>
     btn.addEventListener('click', async () => {
       const key = btn.closest('[data-tool]').dataset.tool;
-      await runTool(key, btn, key === 'month' ? recent : corpus);
+      await runTool(key, btn, corpus);
     }),
   );
   $('#page .ask-form')?.addEventListener('submit', async (ev) => {
@@ -783,7 +821,6 @@ function showResult(key, out, sources, question) {
       }</div>`;
     return `<div class="cols">${col('People', out.people)}${col('Places', out.places)}</div>` + COUNTED;
   }
-  if (key === 'month') return `<p class="recap">${esc(out.recap || '')}</p>`;
   if (key === 'ask') {
     // Only ever link to dreams that were actually sent.
     const ok = new Map(sources.map((e) => [e.id, e]));
@@ -810,6 +847,13 @@ function renderSettings() {
 
       <label class="toggle"><input type="checkbox" id="s-sounds" ${settings.sounds ? 'checked' : ''}>
         <span>Sounds<small>Soft tones and a buzz when recording starts, saves, or drops out, so you don't have to look.</small></span></label>
+
+      <fieldset class="choice" id="s-dim">
+        <legend>Capture screen brightness</legend>
+        ${[['dim', 'Dim'], ['dimmer', 'Dimmer'], ['darkest', 'Darkest']]
+          .map(([v, l]) => `<label><input type="radio" name="dim" value="${v}" ${settings.dim === v ? 'checked' : ''}> ${l}</label>`)
+          .join('')}
+      </fieldset>
 
       <label class="toggle"><input type="checkbox" id="s-local" ${settings.localOnly ? 'checked' : ''}>
         <span>Keep everything on this device<small>Keeps everything on this device. No tidying, no patterns, no image prompts, no sync. The journal still works exactly the same.</small></span></label>
@@ -855,6 +899,10 @@ function renderSettings() {
     settings.sounds = ev.target.checked;
     saveSettings();
     if (settings.sounds) feedback.saved();
+  });
+  on('#s-dim', 'change', (ev) => {
+    settings.dim = ev.target.value;
+    saveSettings();
   });
   on('#s-local', 'change', (ev) => {
     settings.localOnly = ev.target.checked;
@@ -1034,13 +1082,6 @@ function toast(msg) {
 // ─── boot ───────────────────────────────────────────────────────────────────
 
 function boot() {
-  // Dimmer: 0–72% black over everything, remembered.
-  const dim = $('#dimmer');
-  dim.value = LS.get('dim', 0);
-  const applyDim = () => ($('#dim').style.opacity = dim.value / 100);
-  applyDim();
-  dim.addEventListener('input', () => (applyDim(), LS.set('dim', +dim.value)));
-  dim.addEventListener('click', (e) => e.stopPropagation());
 
   // Anywhere on the capture screen that isn't a control records.
   $('#capture').addEventListener('click', (e) => {
@@ -1060,8 +1101,16 @@ function boot() {
   $('#typing').addEventListener('submit', (e) => {
     e.preventDefault();
     const box = $('#type-box');
-    saveDraftAsEntry(box.value);
+    const text = box.value;
     box.value = '';
+    saveDraftAsEntry(text);
+  });
+  $('#retry-voice').addEventListener('click', () => {
+    cap.blocked = false;
+    cap.finalText = $('#type-box').value;
+    $('#type-box').value = '';
+    persistDraft();
+    startRecording();
   });
   $('#type-box').addEventListener('input', (e) => {
     cap.finalText = e.target.value;

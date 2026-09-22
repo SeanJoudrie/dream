@@ -19,7 +19,11 @@ export async function fakeAI(task, input) {
     case 'tidy': {
       const parts = input.text.split(/(?=\b(?:then i had another dream|and in a different one|in another dream)\b)/i);
       return {
-        dreams: parts.slice(0, 4).map((p) => ({ title: title(p), text: sentences(p), transcript: p.trim() })),
+        dreams: parts.slice(0, 4).map((p) => ({
+          title: title(p),
+          text: sentences(p),
+          starts_with: p.trim().split(/\s+/).slice(0, 8).join(' '),
+        })),
       };
     }
     case 'repeats': {
@@ -36,8 +40,6 @@ export async function fakeAI(task, input) {
     }
     case 'who':
       return { people: [{ name: 'someone (fake AI)', count: 1 }], places: [] };
-    case 'month':
-      return { recap: `You recorded ${input.dreams.length} dreams. (This recap is from the stand-in AI.)` };
     case 'ask': {
       const words = input.question.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
       const matches = input.dreams
@@ -45,8 +47,6 @@ export async function fakeAI(task, input) {
         .map((d) => ({ id: d.id, line: d.text.slice(0, 80) }));
       return { matches };
     }
-    case 'image':
-      return { scene: 'first scene', prompt: input.text.split(/\s+/).slice(0, 45).join(' ') };
     default:
       throw new Error('unknown task');
   }

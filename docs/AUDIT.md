@@ -3,6 +3,8 @@
 Audited: `SPEC.md` (2026-09-22) and the prototype at commit `8c13925` (`public/`, `server/`).
 Where a claim says **reproduced**, it was run in Chromium against the real app with a scripted speech recognizer, not just read off the code.
 
+> **Status:** the Part 7 top 10 is done, and each fix was verified in Chromium against the reproduction that found it. Everything else in this audit is still open.
+
 ---
 
 ## Part 1 — Scorecard

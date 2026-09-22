@@ -31,19 +31,11 @@ export function buildUserMessage(task, input = {}) {
     }
     case 'repeats':
     case 'who':
-    case 'month':
       return corpus(input.dreams);
     case 'ask': {
       const q = clip(input.question, 500).trim();
       if (!q) throw new BadRequest('empty question');
       return `${corpus(input.dreams)}\n\n<looking_for>${q}</looking_for>`;
-    }
-    case 'image': {
-      const text = clip(input.text).trim();
-      if (!text) throw new BadRequest('nothing to draw');
-      const used = Array.isArray(input.avoid) ? input.avoid.slice(0, 10).map((s) => clip(s, 200)) : [];
-      const avoid = used.length ? `\n\n<already_used>\n${used.join('\n')}\n</already_used>` : '';
-      return `<dream>\n${text}\n</dream>${avoid}`;
     }
     default:
       throw new BadRequest(`unknown task: ${task}`);
