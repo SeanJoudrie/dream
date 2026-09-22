@@ -98,8 +98,9 @@ function forget(id) {
 // Fire-and-forget after the local write. Never blocks a save.
 
 let pushTimer;
+let syncMissing = false;
 function schedulePush() {
-  if (settings.localOnly) return;
+  if (settings.localOnly || syncMissing) return;
   clearTimeout(pushTimer);
   pushTimer = setTimeout(push, 1500);
 }
@@ -120,6 +121,10 @@ async function pull() {
   if (settings.localOnly) return;
   try {
     const r = await fetch('/api/sync', { headers: { 'x-sync-key': syncKey } });
+    if ([404, 405, 501].includes(r.status)) {
+      syncMissing = true; // static host: no server to sync with
+      return;
+    }
     if (!r.ok) return;
     adopt(await r.json());
     schedulePush();
@@ -512,6 +517,8 @@ async function ai(task, sources, input) {
     throw new AIError("Couldn't reach the server. Nothing was changed.");
   }
   if (r.status === 503) throw new AIError("The AI isn't set up on this server.");
+  // A static host (the GitHub Pages demo) has no /api at all.
+  if ([404, 405, 501].includes(r.status)) throw new AIError("Tidying isn't available in this demo.");
   if (r.status === 422) throw new AIError("The AI declined that one. Nothing was changed.");
   if (!r.ok) throw new AIError("That didn't work. Nothing was changed — try again in a bit.");
   return r.json();
@@ -869,7 +876,7 @@ function renderSettings() {
       </section>
 
       ${
-        settings.localOnly
+        settings.localOnly || syncMissing
           ? ''
           : `<section>
         <h2>Sync</h2>
