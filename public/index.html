@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0912">
+  <meta name="color-scheme" content="dark">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Dream Journal</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300..500;1,6..72,300..400&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="dim" aria-hidden="true"></div>
+
+  <!-- Capture: the whole screen is the button. -->
+  <main id="capture" class="screen night" data-state="idle">
+    <header class="bar">
+      <label class="dimmer">
+        <span class="sr">Dim the screen</span>
+        <input id="dimmer" type="range" min="0" max="72" step="1" value="0">
+      </label>
+      <div class="bar-right">
+        <button id="cancel" class="link" type="button" data-confirm="discard it?" hidden>cancel</button>
+        <a href="#/journal" class="link" id="to-journal">Journal</a>
+      </div>
+    </header>
+
+    <div id="stage" role="button" tabindex="0" aria-label="Tap to start or stop recording a dream">
+      <div class="dot" aria-hidden="true"></div>
+      <div id="idle-copy">
+        <p class="ask">What did you dream?</p>
+        <p class="hint">Tap anywhere and start talking.</p>
+      </div>
+      <p id="transcript" aria-live="polite"><span id="final"></span> <span id="interim"></span></p>
+      <p id="draft-note" class="hint" hidden>unsaved — tap to keep going</p>
+      <p id="banner" role="alert" hidden>Voice input stopped on its own. Tap to pick up where you left off.</p>
+    </div>
+
+    <form id="typing" hidden>
+      <textarea id="type-box" placeholder="What did you dream?" aria-label="Type your dream"></textarea>
+      <div class="typing-foot">
+        <span id="type-why" class="hint"></span>
+        <button type="submit" class="quiet">save</button>
+      </div>
+    </form>
+  </main>
+
+  <section id="page" class="screen day" hidden></section>
+
+  <div id="onboarding" class="screen night" hidden></div>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

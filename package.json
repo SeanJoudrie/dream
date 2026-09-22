@@ -1,0 +1,26 @@
+{
+  "name": "dream-journal",
+  "version": "0.1.0",
+  "description": "A voice-first dream journal. See SPEC.md.",
+  "scripts": {
+    "start": "node server/server.js",
+    "dev": "DREAM_FAKE_AI=1 node --watch server/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SeanJoudrie/dream.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SeanJoudrie/dream/issues"
+  },
+  "homepage": "https://github.com/SeanJoudrie/dream#readme",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0"
+  },
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  }
+}

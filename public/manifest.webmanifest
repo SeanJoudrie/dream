@@ -1,0 +1,10 @@
+{
+  "name": "Dream Journal",
+  "short_name": "Dreams",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0912",
+  "theme_color": "#0a0912",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
